@@ -1,4 +1,5 @@
-import socket  # noqa: F401
+import socket
+import threading
 
 # Used to parse the request data and extract required fields
 def parse_request(request_data):
@@ -8,20 +9,61 @@ def parse_request(request_data):
 
     method, path, version = start_line.split(" ")
 
-    return method, path, version
+    headers = {}
+    header_lines = header.split("\r\n")
+    for line in header_lines:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
 
-# to return the HTTP response for a given path
-def get_response(path):
+    return method, path, version, headers
 
-    # Map of paths to responses
-    responses = {
-        "/": "HTTP/1.1 200 OK\r\n\r\n",
-    }
+def response(status, headers, body):
+    """
+    Returns a formatted HTTP response.
 
-    default_response = "HTTP/1.1 404 Not Found\r\n\r\n"
+    args:
+        status (str): HTTP status code and corresponding message
+        headers (dict): A map of headers and their values.
+        body (str): The body of the response.
+    """
+    return (status + "\r\n" + "".join(f"{key}: {value}\r\n" for key, value in headers.items()) + "\r\n" + body + "\r\n").encode("utf-8")
 
-    # Use the map or give a default response
-    return responses.get(path, default_response)
+
+# to return the HTTP response for a GET method
+def get_method(path, request_headers, request_body):
+
+    response_headers = {}
+    response_body = ""
+
+    if path == "/":
+        status = "HTTP/1.1 200 OK"
+    
+    # Echo endpoint /echo/{str}
+    elif path.lower().startswith("/echo/"):
+        status = "HTTP/1.1 200 OK"
+        response_body = path[6:]
+        response_headers = {
+            "Content-Type": "text/plain",
+            "Content-Length": f"{len(response_body)}",
+        }
+
+    # User-Agent Endpoint /user-agent/
+    elif path.lower() == "/user-agent" or path.lower() == "/user-agent/":
+        status = "HTTP/1.1 200 OK"
+        response_body = request_headers["user-agent"]
+        response_headers = {
+            "Content-Type": "text/plain",
+            "Content-Length": f"{len(response_body)}",
+        }
+        status = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(response_body)}\r\n\r\n{response_body}"
+        
+
+    # Default response if no match found    
+    else:
+        status = "HTTP/1.1 404 Not Found\r\n\r\n"
+
+    return response(status, response_headers, response_body)
 
 def handle_requests(client_socket):
 
@@ -30,16 +72,21 @@ def handle_requests(client_socket):
     # print(f"Data received: {data.decode()}")
 
     request_data = data.decode()
+    print(f"request_data: {request_data}")
 
-    method, path, version = parse_request(request_data)
+    method, path, version, headers = parse_request(data.decode())
 
-    response = get_response(path)
-    
+    if method == "GET":
+        response = get_method(path, headers, request_body="")
+
     # To respond with 200 OK irrespective of the data received
     # response = "HTTP/1.1 200 OK\r\n\r\n"
 
     # Send the response to the client socket after encoding in urf-8 format
-    client_socket.send(response.encode("utf-8"))
+    client_socket.send(response)
+
+    client_socket.close()
+
 
 def main():
     # You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -59,9 +106,8 @@ def main():
 
             print(f"Connection has been established with {addr}")
 
-            handle_requests(conn)
-
-            conn.close()
+            # handle_requests(conn)
+            threading.Thread(target=handle_requests, args=(conn,)).start()
     
     except KeyboardInterrupt:
         print("Server is shutting down...")
