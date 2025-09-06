@@ -1,5 +1,7 @@
 import socket
 import threading
+import argparse
+import os
 
 # Used to parse the request data and extract required fields
 def parse_request(request_data):
@@ -16,7 +18,7 @@ def parse_request(request_data):
             key, value = line.split(":", 1)
             headers[key.strip().lower()] = value.strip()
 
-    return method, path, version, headers
+    return method, path, version, headers, body
 
 def response(status, headers, body):
     """
@@ -32,16 +34,20 @@ def response(status, headers, body):
 
 # to return the HTTP response for a GET method
 def get_method(path, request_headers, request_body):
+    status_codes = {
+        200: "HTTP/1.1 200 OK",
+        404: "HTTP/1.1 404 Not Found",
+    }
 
     response_headers = {}
     response_body = ""
 
     if path == "/":
-        status = "HTTP/1.1 200 OK"
+        status = status_codes[200]
     
     # Echo endpoint /echo/{str}
     elif path.lower().startswith("/echo/"):
-        status = "HTTP/1.1 200 OK"
+        status = status_codes[200]
         response_body = path[6:]
         response_headers = {
             "Content-Type": "text/plain",
@@ -50,18 +56,57 @@ def get_method(path, request_headers, request_body):
 
     # User-Agent Endpoint /user-agent/
     elif path.lower() == "/user-agent" or path.lower() == "/user-agent/":
-        status = "HTTP/1.1 200 OK"
+        status = status_codes[200]
         response_body = request_headers["user-agent"]
         response_headers = {
             "Content-Type": "text/plain",
             "Content-Length": f"{len(response_body)}",
         }
-        status = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(response_body)}\r\n\r\n{response_body}"
+    
+    # File sharing via HTTP
+    elif path.lower().startswith("/files/"):
+        file_name = path[7:].rstrip("/")
+
+        try:
+            with open(f"{source_directory}/{file_name}", 'r') as file:
+                response_body = file.read()
+            
+            status = status_codes[200]
+            response_headers = {
+                "Content-Type": "application/octet-stream",
+                "Content-Length": f"{len(response_body)}",
+            }
         
+        except FileNotFoundError:
+            status = status_codes[404]
 
     # Default response if no match found    
     else:
-        status = "HTTP/1.1 404 Not Found\r\n\r\n"
+        status = status_codes[404]
+
+    return response(status, response_headers, response_body)
+
+# HTTP response for POST method
+def post_method(path, request_headers, request_body):
+    status_codes = {
+        201: "HTTP/1.1 201 Created",
+        500: "HTTP/1.1 500 Internal Server Error"
+    }
+    response_headers = {}
+    response_body = ""
+
+    if path.lower().startswith("/files/"):
+        file_name = path[7:].rstrip("/")
+
+        try:
+            with open(f"{source_directory}/{file_name}", 'a') as file:
+                file.write(request_body[:int(request_headers["content-length"])])
+            
+            status = status_codes[201]
+        
+        except Exception as e:
+            print(e)
+            status = status_codes[500]
 
     return response(status, response_headers, response_body)
 
@@ -74,10 +119,13 @@ def handle_requests(client_socket):
     request_data = data.decode()
     print(f"request_data: {request_data}")
 
-    method, path, version, headers = parse_request(data.decode())
+    method, path, version, headers, body = parse_request(data.decode())
 
     if method == "GET":
-        response = get_method(path, headers, request_body="")
+        response = get_method(path, headers, body)
+
+    elif method == "POST":
+        response = post_method(path, headers, body)
 
     # To respond with 200 OK irrespective of the data received
     # response = "HTTP/1.1 200 OK\r\n\r\n"
@@ -89,6 +137,17 @@ def handle_requests(client_socket):
 
 
 def main():
+    # `argparser` library to take flags while running the program
+    parser = argparse.ArgumentParser("HTTP Server From Scratch")
+    parser.add_argument("-d", "--directory", help="Pass the directory to containing files accessible to the server.", required=False)
+    args = parser.parse_args()
+
+    global source_directory
+
+    # Checking for directory flag and assigning the source directory
+    if args.directory:
+        source_directory = args.directory
+
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     # print("Logs from your program will appear here!")
     print("Server is being started!")
